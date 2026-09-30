@@ -1,6 +1,8 @@
 FROM python:3.11-slim AS build
 WORKDIR /build
 
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm -rf /var/lib/apt/lists/*
+
 # Install build dependencies
 COPY pyproject.toml README.md ./
 COPY vajranow ./vajranow
@@ -22,6 +24,9 @@ RUN pip install --no-cache-dir --prefix=/install .
 FROM python:3.11-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 ENV VAJRANOW_CONFIG=/app/config/prototype.yaml
+
+# Install OpenMP (libgomp1) required by LightGBM
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY --from=build /install /usr/local
