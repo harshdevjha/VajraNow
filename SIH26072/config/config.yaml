@@ -1,0 +1,67 @@
+region:
+  name: "Synthetic demo domain (Maharashtra / Central India Proxy)"
+  bbox: [73.0, 18.0, 79.0, 23.0] # [west, south, east, north] in degrees
+  grid_km: 2.0
+  width: 64
+  height: 64
+  step_minutes: 10
+
+radars:
+  - id: "DWR_PUN"
+    name: "Pune Radar"
+    x: 18.0
+    y: 42.0
+    range_km: 120.0
+    enabled: true
+  - id: "DWR_NGP"
+    name: "Nagpur Radar"
+    x: 48.0
+    y: 18.0
+    range_km: 130.0
+    enabled: true
+  - id: "DWR_HYD"
+    name: "Hyderabad Radar"
+    x: 42.0
+    y: 48.0
+    range_km: 120.0
+    enabled: true
+
+forecast:
+  lead_minutes: [10, 20, 30, 60, 90, 120, 180]
+  severe_dbz: 40.0
+  cell_detection_dbz: 32.0
+  growth_dbz_per_hour: 2.0
+  lightning_dbz_midpoint: 38.0
+  lightning_dbz_scale: 4.0
+  severe_dbz_scale: 3.0
+  observed_strike_probability_bonus: 0.2
+  missing_radar_probability_factor: 0.72
+
+alerts:
+  p_on: 0.55
+  p_off: 0.35
+  consecutive_on: 2
+  consecutive_off: 3
+  strike_clear_minutes: 30
+  radius_km: 15.0
+
+exposure:
+  population_weight: 1.0
+  land_cover_weight: 0.5
+  urban_multiplier: 1.6
+  rural_multiplier: 1.0
+  forest_multiplier: 0.6
+  water_multiplier: 0.2
+
+evaluation:
+  neighborhood_km: 15.0
+  probability_threshold: 0.35
+  severe_threshold_dbz: 40.0
+
+sources:
+  radar: synthetic
+  satellite: synthetic
+  lightning: synthetic
+  model: synthetic_env
+
+ml_enabled: true

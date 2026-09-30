@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090d16">
+  <title>VajraNow | AI/ML Multi-Radar Thunderstorm & Lightning Nowcasting</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="dark-theme">
+  <!-- Topbar Header -->
+  <header class="topbar">
+    <div class="brand-group">
+      <a class="brand" href="/" aria-label="VajraNow home">
+        <span class="brand-badge">⚡</span>
+        <div class="brand-text">
+          <span class="brand-title">VAJRA<span class="brand-accent">NOW</span></span>
+          <span class="brand-subtitle">AI/ML NOWCASTING SUITE · SIH 26072</span>
+        </div>
+      </a>
+      <span class="prototype-tag">PROTOTYPE · NOT OPERATIONAL</span>
+    </div>
+
+    <div class="top-center">
+      <div class="telemetry-pill">
+        <span class="pulse-indicator"></span>
+        <span id="domain-label">MAHARASHTRA / CENTRAL INDIA DOMAIN</span>
+        <span class="pipe">|</span>
+        <span id="clock" class="mono-text">--:--:-- UTC</span>
+      </div>
+    </div>
+
+    <div class="top-actions">
+      <!-- Live Engine Badge -->
+      <div class="engine-card">
+        <span class="engine-kicker">ENGINE</span>
+        <div id="engine-badge" class="engine-badge badge-ml">
+          <span class="engine-dot"></span>
+          <span id="engine-text">ML</span>
+        </div>
+      </div>
+      <button id="btn-scoreboard" class="action-btn" title="View Held-out Evaluation Scoreboard">
+        <span>📊 Scoreboard</span>
+      </button>
+      <button id="btn-replay-modal" class="action-btn secondary" title="Hindcast Replay Engine">
+        <span>⏪ Replay</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Grid Workspace -->
+  <main class="layout">
+    <!-- Center / Left: Interactive Map -->
+    <section class="map-panel" aria-label="Thunderstorm Tracking Map">
+      <div id="map"></div>
+      
+      <!-- Map Overlay HUD -->
+      <div class="map-hud-top">
+        <div class="hud-chip">
+          <span class="hud-label">DOMAIN BBOX</span>
+          <span class="hud-val mono-text">73.0°E - 79.0°E | 18.0°N - 23.0°N</span>
+        </div>
+        <div class="hud-chip">
+          <span class="hud-label">ACTIVE CELLS</span>
+          <span id="map-active-cells" class="hud-val highlight">0</span>
+        </div>
+        <div class="hud-chip">
+          <span class="hud-label">RADAR MESH</span>
+          <span id="map-radar-status" class="hud-val text-green">3/3 ONLINE</span>
+        </div>
+      </div>
+
+      <!-- Map Legend -->
+      <div class="map-legend-glass">
+        <div class="legend-header">REFLECTIVITY & HAZARD</div>
+        <div class="dbz-ramp">
+          <span style="background:#22c55e">30</span>
+          <span style="background:#eab308">38</span>
+          <span style="background:#f97316">45</span>
+          <span style="background:#dc2626">55</span>
+          <span style="background:#9333ea">65+ dBZ</span>
+        </div>
+        <div class="legend-items">
+          <span class="legend-item"><i class="dot severe-dot"></i> Severe Cell (≥40 dBZ)</span>
+          <span class="legend-item"><i class="dot lightning-dot"></i> Lightning Detected</span>
+          <span class="legend-item"><i class="line track-line"></i> Motion Vector</span>
+          <span class="legend-item"><i class="box risk-box"></i> Exposure Risk Block</span>
+        </div>
+      </div>
+
+      <!-- Replay Floating Toolbar -->
+      <div id="replay-toolbar" class="replay-toolbar-glass hidden">
+        <div class="replay-info">
+          <span class="replay-tag">REPLAY MODE</span>
+          <span id="replay-time-label" class="mono-text">T+0 min</span>
+        </div>
+        <div class="replay-buttons">
+          <button id="btn-replay-play" class="replay-btn" title="Play / Pause">▶ Play</button>
+          <button id="btn-replay-step" class="replay-btn" title="Step +10m">⏯ Step</button>
+          <div class="speed-selector">
+            <button class="speed-btn active" data-speed="10">10x</button>
+            <button class="speed-btn" data-speed="30">30x</button>
+            <button class="speed-btn" data-speed="60">60x</button>
+          </div>
+          <button id="btn-replay-close" class="replay-btn close" title="Exit Replay">✕</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Sidebar: Interactive Controls & Explainability -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div>
+          <span class="sidebar-kicker">NOWCAST CONSOLE</span>
+          <h2>Multimodal Fusion</h2>
+        </div>
+        <span class="live-pill">LIVE</span>
+      </div>
+
+      <!-- Section: Model & Radar Controls -->
+      <div class="sidebar-scroll">
+        <div class="control-box glass-panel">
+          <div class="box-title">ENGINE & MODALITY CONTROLS</div>
+          
+          <div class="toggle-group-label">FORECAST ENGINE</div>
+          <div class="segmented-control" role="group">
+            <button id="mode-ml" class="segment-btn active" data-engine="ML">⚡ AI/ML Model</button>
+            <button id="mode-baseline" class="segment-btn" data-engine="BASELINE">📐 LK Baseline</button>
+          </div>
+
+          <div class="toggle-group-label">RADAR NETWORK (DROPOUT TEST)</div>
+          <div class="radar-switches">
+            <label class="radar-checkbox-card" id="card-radar-0">
+              <input type="checkbox" id="toggle-radar-0" checked>
+              <div class="switch-ui"></div>
+              <div class="radar-label">
+                <strong>Radar 1 (Pune DWR)</strong>
+                <small>West Footprint · 120 km</small>
+              </div>
+            </label>
+            <label class="radar-checkbox-card" id="card-radar-1">
+              <input type="checkbox" id="toggle-radar-1" checked>
+              <div class="switch-ui"></div>
+              <div class="radar-label">
+                <strong>Radar 2 (Nagpur DWR)</strong>
+                <small>East Footprint · 130 km</small>
+              </div>
+            </label>
+            <label class="radar-checkbox-card" id="card-radar-2">
+              <input type="checkbox" id="toggle-radar-2" checked>
+              <div class="switch-ui"></div>
+              <div class="radar-label">
+                <strong>Radar 3 (Hyderabad DWR)</strong>
+                <small>South Footprint · 120 km</small>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- Section: Forecast Product & Lead Time Slider -->
+        <div class="control-box glass-panel">
+          <div class="box-title">FORECAST PRODUCT & LEAD TIME</div>
+          <div class="segmented-control" role="group">
+            <button id="prod-lightning" class="segment-btn active" data-prod="lightning">⚡ Lightning P(strike)</button>
+            <button id="prod-severe" class="segment-btn" data-prod="severe">🌪️ Severe P(≥40dBZ)</button>
+          </div>
+
+          <div class="lead-slider-wrap">
+            <div class="slider-header">
+              <span>Forecast Horizon</span>
+              <span id="lead-value" class="mono-text highlight">T+30 min</span>
+            </div>
+            <input type="range" id="lead-slider" min="10" max="180" step="10" value="30">
+            <div class="slider-ticks">
+              <span>+10m</span>
+              <span>+30m</span>
+              <span>+60m</span>
+              <span>+90m</span>
+              <span>+120m</span>
+              <span>+180m</span>
+            </div>
+            <!-- Confidence Badge -->
+            <div id="confidence-badge" class="confidence-badge conf-high">
+              <span class="conf-icon">✓</span>
+              <span id="conf-text">HIGH CONFIDENCE (Physical Scaling Valid)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section: Active Alerts & State Machine -->
+        <div class="control-box glass-panel">
+          <div class="box-title-between">
+            <span>ACTIVE ALERTS</span>
+            <span id="alert-counter-badge" class="counter-badge">0 Active</span>
+          </div>
+          <div id="alerts-list" class="alerts-list">
+            <div class="empty-state">No alerts exceeding threshold (p_on = 0.55).</div>
+          </div>
+        </div>
+
+        <!-- Section: Explainability "Why" Card -->
+        <div class="control-box glass-panel" id="why-card-panel">
+          <div class="box-title">EXPLAINABILITY ("WHY" CARD)</div>
+          <div id="why-card-content">
+            <p class="empty-state">Click a storm cell on the map or in the alert list to inspect SHAP feature attributions and modality ablations.</p>
+          </div>
+        </div>
+
+        <!-- Section: Block-Level Exposure Risk -->
+        <div class="control-box glass-panel">
+          <div class="box-title">BLOCK EXPOSURE RISK (GEOJSON)</div>
+          <div id="risk-blocks-summary" class="risk-blocks-list">
+            <div class="empty-state">Loading administrative blocks...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sidebar Footer -->
+      <footer class="sidebar-footer">
+        <div class="footer-links">
+          <span>VajraNow v1.0.0</span>
+          <a href="/docs" target="_blank">Swagger API ↗</a>
+          <a href="/scoreboard" target="_blank">Scoreboard JSON ↗</a>
+        </div>
+      </footer>
+    </aside>
+  </main>
+
+  <!-- Scoreboard Modal -->
+  <div id="scoreboard-modal" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <h3>📊 Honest Evaluation Scoreboard</h3>
+          <p class="modal-subtitle">Held-Out Convective Split (Grouped by Event ID · Never Random Frames)</p>
+        </div>
+        <button id="btn-close-scoreboard" class="modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="scoreboard-body">
+        <div class="loading-spinner">Evaluating held-out events...</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
