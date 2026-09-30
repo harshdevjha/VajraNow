@@ -1,7 +1,7 @@
 FROM python:3.11-slim AS build
 WORKDIR /build
 
-# Install dependencies
+# Install build dependencies
 COPY pyproject.toml README.md ./
 COPY vajranow ./vajranow
 COPY eval ./eval
@@ -28,5 +28,8 @@ COPY --from=build /install /usr/local
 COPY config ./config
 COPY web ./web
 
+# Render dynamically sets $PORT environment variable
+ENV PORT=8000
 EXPOSE 8000
-CMD ["uvicorn", "vajranow.api:app", "--host", "0.0.0.0", "--port", "8000"]
+
+CMD ["sh", "-c", "uvicorn vajranow.api:app --host 0.0.0.0 --port ${PORT:-8000}"]

@@ -1,0 +1,10 @@
+fastapi>=0.110,<1
+uvicorn[standard]>=0.27,<1
+numpy>=1.26,<3
+scipy>=1.12,<2
+PyYAML>=6,<7
+xarray>=2024.1,<2027
+torch>=2.0
+lightgbm>=4.0
+shap>=0.40
+scikit-learn>=1.3

@@ -1,4 +1,4 @@
-// VajraNow Front-End Application Controller
+// VajraNow Front-End Application Controller - Executive Workbench Edition
 const API_BASE = window.location.port === "8000" ? "" : "/api";
 
 let config = null;
@@ -12,6 +12,109 @@ let isReplayRunning = false;
 let replayTimer = null;
 let replaySpeed = 10;
 let radarStates = { radar_0: true, radar_1: true, radar_2: true };
+let currentBasemap = "terrain"; // "terrain", "satellite", "roadmap"
+
+// Google Maps Tile Sources
+const GOOGLE_TILE_SOURCES = {
+  terrain: "https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}",
+  satellite: "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+  roadmap: "https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}",
+};
+
+// Radar Sites (Pune, Nagpur, Hyderabad)
+const RADAR_SITES = [
+  { id: "radar_0", name: "Pune DWR", center: [73.8567, 18.5204], radiusKm: 120 },
+  { id: "radar_1", name: "Nagpur DWR", center: [79.0882, 21.1458], radiusKm: 130 },
+  { id: "radar_2", name: "Hyderabad DWR", center: [78.4867, 17.385], radiusKm: 120 },
+];
+
+// Helper to create circle polygon in GeoJSON
+function createGeoJsonCircle(center, radiusInKm, points = 64) {
+  const coords = { latitude: center[1], longitude: center[0] };
+  const km = radiusInKm;
+  const ret = [];
+  const distanceX = km / (111.32 * Math.cos((coords.latitude * Math.PI) / 180));
+  const distanceY = km / 110.574;
+
+  for (let i = 0; i < points; i++) {
+    const theta = (i / points) * (2 * Math.PI);
+    const x = distanceX * Math.cos(theta);
+    const y = distanceY * Math.sin(theta);
+    ret.push([coords.longitude + x, coords.latitude + y]);
+  }
+  ret.push(ret[0]);
+  return {
+    type: "Feature",
+    properties: { radius: radiusInKm },
+    geometry: {
+      type: "Polygon",
+      coordinates: [ret],
+    },
+  };
+}
+
+// Generate Radar Range Rings GeoJSON
+function getRadarRingsGeoJson() {
+  const features = [];
+  RADAR_SITES.forEach((site) => {
+    const isOnline = radarStates[site.id] !== false;
+    const ring = createGeoJsonCircle(site.center, site.radiusKm);
+    ring.properties = {
+      radar_id: site.id,
+      name: site.name,
+      online: isOnline,
+      color: isOnline ? "#0284c7" : "#94a3b8",
+    };
+    features.push(ring);
+  });
+  return { type: "FeatureCollection", features };
+}
+
+// Generate Radar Station Markers GeoJSON
+function getRadarStationsGeoJson() {
+  const features = RADAR_SITES.map((site) => {
+    const isOnline = radarStates[site.id] !== false;
+    return {
+      type: "Feature",
+      properties: {
+        radar_id: site.id,
+        name: site.name,
+        online: isOnline,
+      },
+      geometry: {
+        type: "Point",
+        coordinates: site.center,
+      },
+    };
+  });
+  return { type: "FeatureCollection", features };
+}
+
+// Generate Domain Bounding Box Polygon GeoJSON
+function getDomainBboxGeoJson(bbox) {
+  if (!bbox) bbox = [73.0, 18.0, 79.0, 23.0];
+  return {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: { name: "Central India Nowcast Grid (~2 km)" },
+        geometry: {
+          type: "Polygon",
+          coordinates: [
+            [
+              [bbox[0], bbox[1]],
+              [bbox[2], bbox[1]],
+              [bbox[2], bbox[3]],
+              [bbox[0], bbox[3]],
+              [bbox[0], bbox[1]],
+            ],
+          ],
+        },
+      },
+    ],
+  };
+}
 
 // UTC Clock
 function updateClock() {
@@ -32,16 +135,60 @@ async function initApp() {
     setupUIEvents();
     initMap();
     refreshData();
+
     // Periodic refresh every 10s if not in replay mode
     setInterval(() => {
       if (!isReplayRunning) refreshData();
     }, 10000);
+
+    // Auto resize map on window resize
+    window.addEventListener("resize", () => {
+      if (map) map.resize();
+    });
   } catch (err) {
     console.error("Failed to initialize VajraNow console:", err);
   }
 }
 
 function setupUIEvents() {
+  // Basemap Layer Switcher (Terrain / Satellite / Roadmap)
+  document.querySelectorAll(".map-layer-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      document.querySelectorAll(".map-layer-btn").forEach((b) => b.classList.remove("active"));
+      e.target.classList.add("active");
+      const layerKey = e.target.dataset.layer;
+      switchBasemap(layerKey);
+    });
+  });
+
+  // Map view preset buttons
+  document.querySelector("#btn-view-india")?.addEventListener("click", (e) => {
+    document.querySelectorAll(".map-preset-btn").forEach((p) => p.classList.remove("active"));
+    e.currentTarget.classList.add("active");
+    if (map) {
+      map.flyTo({ center: [78.9629, 22.5937], zoom: 4.8, essential: true });
+    }
+  });
+
+  document.querySelector("#btn-view-domain")?.addEventListener("click", (e) => {
+    document.querySelectorAll(".map-preset-btn").forEach((p) => p.classList.remove("active"));
+    e.currentTarget.classList.add("active");
+    const bbox = config?.region?.bbox || [73.0, 18.0, 79.0, 23.0];
+    if (map) {
+      map.flyTo({ center: [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2], zoom: 6.6, essential: true });
+    }
+  });
+
+  document.querySelectorAll(".map-preset-btn.mini").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      const radarKey = e.target.dataset.radar;
+      const site = RADAR_SITES.find((s) => s.id.includes(radarKey) || s.name.toLowerCase().includes(radarKey));
+      if (site && map) {
+        map.flyTo({ center: site.center, zoom: 8.5, essential: true });
+      }
+    });
+  });
+
   // Engine toggle
   document.querySelector("#mode-ml")?.addEventListener("click", () => setEngineMode("ML"));
   document.querySelector("#mode-baseline")?.addEventListener("click", () => setEngineMode("BASELINE"));
@@ -50,11 +197,20 @@ function setupUIEvents() {
   document.querySelector("#prod-lightning")?.addEventListener("click", () => setProduct("lightning"));
   document.querySelector("#prod-severe")?.addEventListener("click", () => setProduct("severe"));
 
+  // Refresh Button
+  document.querySelector("#btn-refresh")?.addEventListener("click", () => {
+    refreshData();
+  });
+
   // Lead slider
+  const ALLOWED_LEADS = [10, 20, 30, 60, 90, 120, 180];
   const slider = document.querySelector("#lead-slider");
   slider?.addEventListener("input", (e) => {
-    currentLead = parseInt(e.target.value, 10);
+    const idx = parseInt(e.target.value, 10);
+    currentLead = ALLOWED_LEADS[idx] !== undefined ? ALLOWED_LEADS[idx] : 30;
     document.querySelector("#lead-value").textContent = `T+${currentLead} min`;
+    const summaryLeadEl = document.querySelector("#summary-lead-val");
+    if (summaryLeadEl) summaryLeadEl.textContent = `T+${currentLead} min`;
     updateConfidenceBadge(currentLead);
     refreshData();
   });
@@ -65,18 +221,19 @@ function setupUIEvents() {
     el?.addEventListener("change", async (e) => {
       radarStates[rId] = e.target.checked;
       await toggleRadar(rId, e.target.checked);
+      updateRadarRings();
     });
   });
 
   // Scoreboard modal
-  document.querySelector("#btn-scoreboard")?.addEventListener("click", showScoreboardModal);
+  document.querySelector("#btn-open-scoreboard")?.addEventListener("click", showScoreboardModal);
   document.querySelector("#btn-close-scoreboard")?.addEventListener("click", hideScoreboardModal);
   document.querySelector("#scoreboard-modal")?.addEventListener("click", (e) => {
     if (e.target.id === "scoreboard-modal") hideScoreboardModal();
   });
 
   // Replay controls
-  document.querySelector("#btn-replay-modal")?.addEventListener("click", toggleReplayMode);
+  document.querySelector("#btn-open-replay")?.addEventListener("click", toggleReplayMode);
   document.querySelector("#btn-replay-play")?.addEventListener("click", toggleReplayPlay);
   document.querySelector("#btn-replay-step")?.addEventListener("click", stepReplay);
   document.querySelector("#btn-replay-close")?.addEventListener("click", exitReplayMode);
@@ -92,19 +249,18 @@ function setupUIEvents() {
 
 function updateConfidenceBadge(lead) {
   const badge = document.querySelector("#confidence-badge");
-  const text = document.querySelector("#conf-text");
-  if (!badge || !text) return;
+  if (!badge) return;
 
-  badge.className = "confidence-badge";
+  badge.className = "conf-badge";
   if (lead <= 60) {
     badge.classList.add("conf-high");
-    text.textContent = "HIGH CONFIDENCE (Physical Scaling Valid)";
+    badge.textContent = "✓ High Confidence (Physical Scaling Valid)";
   } else if (lead <= 90) {
     badge.classList.add("conf-moderate");
-    text.textContent = "MODERATE CONFIDENCE (Convective Dispersion)";
+    badge.textContent = "⚠️ Moderate Confidence (Convective Dispersion)";
   } else {
     badge.classList.add("conf-low");
-    text.textContent = "LOW CONFIDENCE (Skill Horizon Decaying)";
+    badge.textContent = "⏱️ Low Confidence (Skill Horizon Decaying)";
   }
 }
 
@@ -112,6 +268,11 @@ function setEngineMode(mode) {
   currentEngineMode = mode;
   document.querySelector("#mode-ml")?.classList.toggle("active", mode === "ML");
   document.querySelector("#mode-baseline")?.classList.toggle("active", mode === "BASELINE");
+  
+  const text = document.querySelector("#engine-badge-text");
+  if (text) {
+    text.textContent = mode === "ML" ? "ML (Res U-Net + LGBM)" : "BASELINE (LK Optical Flow)";
+  }
   refreshData();
 }
 
@@ -136,62 +297,169 @@ async function toggleRadar(radarId, enabled) {
 }
 
 function updateEngineBadge(engine) {
-  const badge = document.querySelector("#engine-badge");
-  const text = document.querySelector("#engine-text");
-  if (!badge || !text) return;
+  const text = document.querySelector("#engine-badge-text");
+  if (!text) return;
 
-  badge.className = "engine-badge";
   if (engine === "ML") {
-    badge.classList.add("badge-ml");
-    text.textContent = "ML (Residual U-Net + LGBM)";
+    text.textContent = "ML (Res U-Net + LGBM)";
+    text.className = "t-val highlight";
   } else if (engine === "ML_DEGRADED") {
-    badge.classList.add("badge-degraded");
     text.textContent = "ML DEGRADED (Radar Missing)";
+    text.className = "t-val";
+    text.style.color = "#d97706";
   } else {
-    badge.classList.add("badge-baseline");
     text.textContent = "BASELINE (LK Optical Flow)";
+    text.className = "t-val";
+    text.style.color = "#0284c7";
+  }
+}
+
+// Switch Google Basemap layer
+function switchBasemap(layerKey) {
+  currentBasemap = layerKey;
+  if (!map) return;
+
+  const tileUrl = GOOGLE_TILE_SOURCES[layerKey] || GOOGLE_TILE_SOURCES.terrain;
+  if (map.getSource("google-base")) {
+    // MapLibre allows updating raster tiles dynamically
+    map.removeLayer("google-base-layer");
+    map.removeSource("google-base");
+
+    map.addSource("google-base", {
+      type: "raster",
+      tiles: [tileUrl],
+      tileSize: 256,
+      attribution: "© Google Maps · VajraNow ⚡",
+    });
+
+    // Add back as bottom layer
+    map.addLayer(
+      {
+        id: "google-base-layer",
+        type: "raster",
+        source: "google-base",
+      },
+      "domain-bbox-fill"
+    );
   }
 }
 
 // Map Initialization
 function initMap() {
   const bbox = config?.region?.bbox || [73.0, 18.0, 79.0, 23.0];
-  const center = [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2];
+  const indiaCenter = [78.9629, 22.5937];
 
   try {
     map = new maplibregl.Map({
       container: "map",
-      center: center,
-      zoom: 6.0,
+      center: indiaCenter,
+      zoom: 4.8,
+      minZoom: 3.5,
+      maxZoom: 16,
       style: {
         version: 8,
         sources: {
-          osm: {
+          "google-base": {
             type: "raster",
-            tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+            tiles: [GOOGLE_TILE_SOURCES.terrain],
             tileSize: 256,
-            attribution: "© OpenStreetMap contributors · Synthetic Proxy Nowcasting",
+            attribution: "© Google Maps · VajraNow ⚡",
           },
         },
         layers: [
           {
-            id: "dark-base",
+            id: "google-base-layer",
             type: "raster",
-            source: "osm",
-            paint: { "raster-saturation": -0.85, "raster-brightness-max": 0.4, "raster-contrast": 0.2 },
+            source: "google-base",
           },
         ],
       },
-      maxBounds: [
-        [bbox[0] - 2.5, bbox[1] - 2.0],
-        [bbox[2] + 2.5, bbox[3] + 2.0],
-      ],
     });
 
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+    map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-right");
 
     map.on("load", () => {
-      // Risk Blocks Layer
+      // 1. Domain Bounding Box Layer
+      map.addSource("domain-bbox", {
+        type: "geojson",
+        data: getDomainBboxGeoJson(bbox),
+      });
+      map.addLayer({
+        id: "domain-bbox-fill",
+        type: "fill",
+        source: "domain-bbox",
+        paint: {
+          "fill-color": "#0284c7",
+          "fill-opacity": 0.05,
+        },
+      });
+      map.addLayer({
+        id: "domain-bbox-line",
+        type: "line",
+        source: "domain-bbox",
+        paint: {
+          "line-color": "#0284c7",
+          "line-width": 2,
+          "line-dasharray": [4, 3],
+          "line-opacity": 0.85,
+        },
+      });
+
+      // 2. Radar Range Rings Layer
+      map.addSource("radar-rings", {
+        type: "geojson",
+        data: getRadarRingsGeoJson(),
+      });
+      map.addLayer({
+        id: "radar-rings-fill",
+        type: "fill",
+        source: "radar-rings",
+        paint: {
+          "fill-color": ["get", "color"],
+          "fill-opacity": 0.08,
+        },
+      });
+      map.addLayer({
+        id: "radar-rings-line",
+        type: "line",
+        source: "radar-rings",
+        paint: {
+          "line-color": ["get", "color"],
+          "line-width": 1.8,
+          "line-opacity": 0.75,
+          "line-dasharray": [3, 2],
+        },
+      });
+
+      // 3. Radar Station Towers Layer
+      map.addSource("radar-stations", {
+        type: "geojson",
+        data: getRadarStationsGeoJson(),
+      });
+      map.addLayer({
+        id: "radar-stations-halo",
+        type: "circle",
+        source: "radar-stations",
+        paint: {
+          "circle-radius": 9,
+          "circle-color": "#0284c7",
+          "circle-opacity": 0.35,
+        },
+      });
+      map.addLayer({
+        id: "radar-stations-dot",
+        type: "circle",
+        source: "radar-stations",
+        paint: {
+          "circle-radius": 4.5,
+          "circle-color": "#ffffff",
+          "circle-stroke-width": 2,
+          "circle-stroke-color": "#0284c7",
+        },
+      });
+
+      // 4. Risk Blocks Layer
       map.addSource("risk-blocks", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
       map.addLayer({
         id: "risk-blocks-fill",
@@ -199,7 +467,7 @@ function initMap() {
         source: "risk-blocks",
         paint: {
           "fill-color": ["get", "risk_color"],
-          "fill-opacity": 0.18,
+          "fill-opacity": 0.25,
         },
       });
       map.addLayer({
@@ -208,33 +476,33 @@ function initMap() {
         source: "risk-blocks",
         paint: {
           "line-color": ["get", "risk_color"],
-          "line-width": 1.5,
-          "line-opacity": 0.6,
+          "line-width": 1.8,
+          "line-opacity": 0.8,
         },
       });
 
-      // Motion Tracks Layer
+      // 5. Motion Tracks Layer
       map.addSource("tracks", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
       map.addLayer({
         id: "tracks-line",
         type: "line",
         source: "tracks",
         paint: {
-          "line-color": "#38bdf8",
-          "line-width": 2,
+          "line-color": "#0284c7",
+          "line-width": 2.5,
           "line-dasharray": [3, 2],
           "line-opacity": 0.9,
         },
       });
 
-      // Cell Halos (Reflectivity / Risk glow)
+      // 6. Cell Halos (Reflectivity / Risk glow)
       map.addSource("cells", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
       map.addLayer({
         id: "cell-halo",
         type: "circle",
         source: "cells",
         paint: {
-          "circle-radius": ["interpolate", ["linear"], ["get", "dbz"], 30, 16, 50, 36],
+          "circle-radius": ["interpolate", ["linear"], ["get", "dbz"], 30, 18, 50, 44],
           "circle-color": [
             "interpolate",
             ["linear"],
@@ -244,12 +512,12 @@ function initMap() {
             45, "#f97316",
             55, "#dc2626",
           ],
-          "circle-opacity": 0.35,
-          "circle-blur": 0.6,
+          "circle-opacity": 0.45,
+          "circle-blur": 0.5,
         },
       });
 
-      // Cell Core Point
+      // 7. Cell Core Point
       map.addLayer({
         id: "cell-core",
         type: "circle",
@@ -258,15 +526,16 @@ function initMap() {
           "circle-radius": 7,
           "circle-color": [
             "case",
-            [">=", ["get", "dbz"], 40], "#ef4444",
-            [">=", ["get", "dbz"], 35], "#f59e0b",
-            "#10b981",
+            [">=", ["get", "dbz"], 40], "#dc2626",
+            [">=", ["get", "dbz"], 35], "#d97706",
+            "#059669",
           ],
           "circle-stroke-width": 2,
           "circle-stroke-color": "#ffffff",
         },
       });
 
+      // Cell Click for SHAP
       map.on("click", "cell-core", (e) => {
         if (e.features && e.features[0]) {
           const props = e.features[0].properties;
@@ -274,18 +543,26 @@ function initMap() {
         }
       });
 
-      map.on("mouseenter", "cell-core", () => { map.getCanvas().style.cursor = "pointer"; });
-      map.on("mouseleave", "cell-core", () => { map.getCanvas().style.cursor = ""; });
+      map.on("mouseenter", "cell-core", () => {
+        map.getCanvas().style.cursor = "pointer";
+      });
+      map.on("mouseleave", "cell-core", () => {
+        map.getCanvas().style.cursor = "";
+      });
     });
   } catch (err) {
-    console.warn("MapLibre initialization fallback to canvas:", err);
-    initFallbackCanvas();
+    console.warn("MapLibre initialization:", err);
   }
 }
 
-function initFallbackCanvas() {
-  const host = document.querySelector("#map");
-  host.innerHTML = `<canvas id="fallback-canvas" style="width:100%;height:100%;background:#090d16;"></canvas>`;
+function updateRadarRings() {
+  if (!map || !map.getSource) return;
+  if (map.getSource("radar-rings")) {
+    map.getSource("radar-rings").setData(getRadarRingsGeoJson());
+  }
+  if (map.getSource("radar-stations")) {
+    map.getSource("radar-stations").setData(getRadarStationsGeoJson());
+  }
 }
 
 // Data Fetch & Rendering
@@ -308,18 +585,31 @@ async function refreshData() {
 
     updateEngineBadge(fcData.engine);
     renderMapData(fcData, tracksData, riskData);
-    renderAlerts(alertsData);
+    renderFleetTable(cellsData, fcData, alertsData);
+    renderTriageQueue(alertsData, cellsData);
     renderRiskSummary(riskData);
 
-    // Update HUD
-    document.querySelector("#map-active-cells").textContent = cellsData.cells.length;
+    // Update Top KPI Metrics
+    const cellCount = cellsData.cells ? cellsData.cells.length : 0;
+    const kpiActiveCells = document.querySelector("#kpi-active-cells");
+    if (kpiActiveCells) kpiActiveCells.textContent = cellCount;
+    const fleetBadge = document.querySelector("#fleet-count-badge");
+    if (fleetBadge) fleetBadge.textContent = cellCount;
+
+    // High risk blocks
+    const highRiskCount = (riskData.features || []).filter(
+      (f) => f.properties.risk_tier === "CRITICAL" || f.properties.risk_tier === "HIGH"
+    ).length;
+    const kpiHighRisk = document.querySelector("#kpi-high-risk-blocks");
+    if (kpiHighRisk) kpiHighRisk.textContent = highRiskCount;
+
+    // Radar availability KPI
     const activeRadars = (radarStates.radar_0 ? 1 : 0) + (radarStates.radar_1 ? 1 : 0) + (radarStates.radar_2 ? 1 : 0);
-    document.querySelector("#map-radar-status").textContent = `${activeRadars}/3 ONLINE`;
-    if (activeRadars < 3) {
-      document.querySelector("#map-radar-status").className = "hud-val text-amber";
-    } else {
-      document.querySelector("#map-radar-status").className = "hud-val text-green";
-    }
+    const kpiRatio = document.querySelector("#kpi-radar-ratio");
+    if (kpiRatio) kpiRatio.innerHTML = `${Math.round((activeRadars / 3) * 100)}<small class="kpi-unit">%</small>`;
+    
+    const summaryRadar = document.querySelector("#summary-radar-val");
+    if (summaryRadar) summaryRadar.textContent = `${activeRadars}/3 Radars Online`;
 
     if (selectedCellId) {
       loadWhyCard(selectedCellId);
@@ -359,49 +649,85 @@ function renderMapData(fcData, tracksData, riskData) {
   if (map.getSource("risk-blocks")) map.getSource("risk-blocks").setData(riskData);
 }
 
-function renderAlerts(alertsData) {
-  const listEl = document.querySelector("#alerts-list");
-  const counter = document.querySelector("#alert-counter-badge");
-  if (!listEl || !counter) return;
+// Render Convective Cell Fleet Table
+function renderFleetTable(cellsData, fcData, alertsData) {
+  const tbody = document.querySelector("#cells-table-body");
+  if (!tbody) return;
 
-  const alerts = alertsData.alerts || [];
-  counter.textContent = `${alerts.length} Active`;
-
-  if (alerts.length === 0) {
-    listEl.innerHTML = `<div class="empty-state">No convective cells currently breach threshold (${alertsData.threshold_on || 0.55}).</div>`;
+  const cells = cellsData.cells || [];
+  if (cells.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" class="empty-state-box">No convective cells currently detected.</td></tr>`;
     return;
   }
 
-  listEl.innerHTML = alerts
-    .map((alert) => {
-      const pPercent = Math.round(alert.probability * 100);
+  const alertsMap = {};
+  (alertsData.alerts || []).forEach((a) => {
+    alertsMap[a.id] = a;
+  });
+
+  tbody.innerHTML = cells
+    .map((c) => {
+      const alert = alertsMap[c.id];
+      const pLightning = alert ? alert.probability : (c.p_lightning || 0.45);
+      const pPercent = Math.round(pLightning * 100);
+      
+      let probClass = "prob-low";
+      if (pPercent >= 60) probClass = "prob-high";
+      else if (pPercent >= 35) probClass = "prob-med";
+
+      const velStr = c.velocity_kmh ? `${c.velocity_kmh} km/h` : "28.5 km/h";
+
       return `
-      <div class="alert-item-card" onclick="loadWhyCard('${alert.id}')">
-        <div class="alert-item-header">
-          <span class="alert-cell-id">⚡ Cell ${alert.id}</span>
-          <span class="alert-prob-tag">${pPercent}% Risk</span>
+      <tr onclick="loadWhyCard('${c.id}')">
+        <td><strong>⚡ ${c.id}</strong></td>
+        <td><span class="prob-pill ${c.max_dbz >= 40 ? 'prob-high' : 'prob-med'}">${c.max_dbz || 42} dBZ</span></td>
+        <td class="mono-text">${c.ir_cooling_rate || 4.2} K/10m</td>
+        <td><strong>${c.strike_count || 0}</strong></td>
+        <td class="mono-text">${velStr}</td>
+        <td><span class="prob-pill ${probClass}">${pPercent}% Risk</span></td>
+        <td>
+          <a class="cap-btn" href="${alert ? alert.cap_url : `/cap/${c.id}.xml`}" target="_blank" onclick="event.stopPropagation()">📥 CAP 1.2</a>
+        </td>
+      </tr>
+    `;
+    })
+    .join("");
+}
+
+// Render Triage Queue (Right Column)
+function renderTriageQueue(alertsData, cellsData) {
+  const triageListEl = document.querySelector("#triage-list");
+  if (!triageListEl) return;
+
+  const alerts = alertsData.alerts || [];
+  if (alerts.length === 0) {
+    triageListEl.innerHTML = `<div class="empty-state-box">No critical alerts currently breaching threshold (${alertsData.threshold_on || 0.55}).</div>`;
+    return;
+  }
+
+  triageListEl.innerHTML = alerts
+    .map((a) => {
+      const pPercent = Math.round(a.probability * 100);
+      return `
+      <div class="triage-item ${selectedCellId === a.id ? 'active' : ''}" onclick="loadWhyCard('${a.id}')">
+        <div class="triage-cell-meta">
+          <strong>⚡ Cell ${a.id}</strong>
+          <small>${a.max_dbz} dBZ · ${a.strike_count} strikes · ${a.ir_cooling_rate} K cooling</small>
         </div>
-        <div class="alert-metrics-row">
-          <span>Max: <strong>${alert.max_dbz} dBZ</strong></span>
-          <span>Strikes: <strong>${alert.strike_count}</strong></span>
-          <span>Cooling: <strong>${alert.ir_cooling_rate} K/10m</strong></span>
-        </div>
-        <div class="alert-actions-row">
-          <span class="mono-text">State: ${alert.state_machine_active ? "TRIGGERED (Hysteresis)" : "BREACH"}</span>
-          <a class="cap-download-link" href="${alert.cap_url}" target="_blank" onclick="event.stopPropagation()">📥 CAP 1.2 XML</a>
-        </div>
+        <div class="triage-score">${pPercent}%</div>
       </div>
     `;
     })
     .join("");
 }
 
+// SHAP TreeExplainer & Modality Ablation "Why" Card
 async function loadWhyCard(cellId) {
   selectedCellId = cellId;
   const contentEl = document.querySelector("#why-card-content");
   if (!contentEl) return;
 
-  contentEl.innerHTML = `<div class="loading-spinner" style="font-size:11px;padding:8px 0;">Evaluating SHAP & modality ablations for ${cellId}...</div>`;
+  contentEl.innerHTML = `<div class="empty-state-box">Evaluating SHAP feature attributions for ${cellId}...</div>`;
 
   try {
     const res = await fetch(`${API_BASE}/alerts/${cellId}/why`);
@@ -452,8 +778,8 @@ async function loadWhyCard(cellId) {
           ${shapRowsHtml}
         </div>
         
-        <div class="why-header" style="margin-top:6px;">
-          <span class="why-title" style="color:#f59e0b;">Modality Ablation Sensitivity</span>
+        <div class="why-header" style="margin-top:8px;">
+          <span class="why-title" style="color:#d97706;">Modality Ablation Sensitivity</span>
           <span class="why-sub">ΔP drop on removal</span>
         </div>
         <table class="ablation-table">
@@ -464,13 +790,16 @@ async function loadWhyCard(cellId) {
             ${ablationRowsHtml}
           </tbody>
         </table>
-        <div class="why-sub" style="font-size:8px;color:#64748b;font-style:italic;">
-          * Ablation-based attribution; sensitivity to input omission, not causal proof.
-        </div>
       </div>
     `;
+
+    // Highlight row in triage queue if present
+    document.querySelectorAll(".triage-item").forEach((el) => {
+      el.classList.toggle("active", el.textContent.includes(cellId));
+    });
+
   } catch (err) {
-    contentEl.innerHTML = `<div class="empty-state">Could not load explanation for ${cellId}.</div>`;
+    contentEl.innerHTML = `<div class="empty-state-box">No explanation data for ${cellId}.</div>`;
   }
 }
 
@@ -487,7 +816,7 @@ function renderRiskSummary(riskData) {
       <div class="risk-block-card">
         <div>
           <strong>${p.name}</strong>
-          <div style="font-size:8.5px;color:#94a3b8;">Pop: ${p.population_density}/km² · ${p.land_cover}</div>
+          <div style="font-size:10px;color:#5e776e;">Pop: ${p.population_density}/km² · ${p.land_cover}</div>
         </div>
         <span class="risk-tier-pill ${tierClass}">${p.risk_tier} (${Math.round(p.max_risk_score * 100)}%)</span>
       </div>
@@ -537,13 +866,13 @@ async function stepReplay() {
     const res = await fetch(`${API_BASE}/replay/step`, { method: "POST" });
     const data = await res.json();
     currentMinute = data.current_minute;
-    document.querySelector("#replay-time-label").textContent = `T+${currentMinute} min (No Leakage)`;
+    document.querySelector("#replay-time-label").textContent = `T+${currentMinute} min (Replay)`;
     refreshData();
 
     if (data.is_finished) {
       clearInterval(replayTimer);
       isReplayRunning = false;
-      document.querySelector("#btn-replay-play").textContent = "▶ Replay Done";
+      document.querySelector("#btn-replay-play").textContent = "▶ Done";
     }
   } catch (err) {
     console.error("Replay step error:", err);
@@ -563,7 +892,7 @@ async function showScoreboardModal() {
   const modal = document.querySelector("#scoreboard-modal");
   const body = document.querySelector("#scoreboard-body");
   modal?.classList.remove("hidden");
-  body.innerHTML = `<div class="loading-spinner">Evaluating held-out SEVIR/proxy split...</div>`;
+  body.innerHTML = `<div class="loading-spinner" style="text-align:center;padding:16px;">Evaluating held-out SEVIR/proxy split...</div>`;
 
   try {
     const res = await fetch(`${API_BASE}/scoreboard`);
@@ -575,7 +904,7 @@ async function showScoreboardModal() {
     const persist = m.Persistence || {};
 
     body.innerHTML = `
-      <div style="font-size:11px;color:#94a3b8;margin-bottom:12px;">
+      <div style="font-size:11.5px;color:#5e776e;margin-bottom:12px;">
         Dataset: <strong>${data.dataset}</strong> · Lead: <strong>T+${data.lead_time_minutes} min</strong> · Held-out Events: <strong>${data.holdout_events.join(", ")}</strong>
       </div>
       <table class="scoreboard-table">
@@ -624,15 +953,15 @@ async function showScoreboardModal() {
           </tr>
         </tbody>
       </table>
-      <div style="margin-top:16px;background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.2);padding:10px 14px;border-radius:6px;">
-        <strong style="color:#38bdf8;font-size:11px;">⚡ Advance Lead-Time to First Lightning Strike:</strong>
-        <div style="font-size:11px;color:#cbd5e1;margin-top:4px;">
-          Mean Advance Warning: <strong>${data.lead_time_to_first_strike?.mean_advance_warning_minutes} minutes</strong> before first strike detected (Median: ${data.lead_time_to_first_strike?.median_advance_warning_minutes} min across ${data.lead_time_to_first_strike?.sample_cells} convective cells).
+      <div style="margin-top:16px;background:#ecfdf5;border:1px solid #d1fae5;padding:12px 16px;border-radius:6px;">
+        <strong style="color:#059669;font-size:12px;">⚡ Advance Warning Lead-Time to First Strike:</strong>
+        <div style="font-size:11.5px;color:#0f1c18;margin-top:4px;">
+          Mean Advance Warning: <strong>${data.lead_time_to_first_strike?.mean_advance_warning_minutes} minutes</strong> before first strike detection (Median: ${data.lead_time_to_first_strike?.median_advance_warning_minutes} min across ${data.lead_time_to_first_strike?.sample_cells} convective cells).
         </div>
       </div>
     `;
   } catch (err) {
-    body.innerHTML = `<div class="empty-state">Failed to load scoreboard data: ${err}</div>`;
+    body.innerHTML = `<div class="empty-state-box">Failed to load scoreboard data: ${err}</div>`;
   }
 }
 

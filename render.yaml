@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: vajranow-workbench
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: VAJRANOW_CONFIG
+        value: /app/config/prototype.yaml
